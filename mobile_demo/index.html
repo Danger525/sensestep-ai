@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0d12">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>SenseStep Mobile — Intelligent Spatial Feedback Navigation</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+
+  <!-- TensorFlow.js & COCO-SSD (Local Browser-Side Object Detection) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+</head>
+<body>
+  <div id="app-container">
+    <!-- Top System Header -->
+    <header class="app-header">
+      <div class="header-branding">
+        <div class="brand-row">
+          <span class="brand-pulse"></span>
+          <h1>SENSESTEP</h1>
+        </div>
+        <p class="brand-tagline">ASSISTIVE VOICE & HAPTIC GUIDANCE</p>
+      </div>
+      <div class="header-actions">
+        <button id="btn-toggle-debug" class="btn btn-action-debug" title="Toggle Live Debug Telemetry">
+          <span id="debug-icon">🐞</span>
+          <span id="debug-text">DEBUG</span>
+        </button>
+        <button id="btn-toggle-voice" class="btn btn-action-voice" title="Enable Voice Guidance">
+          <span id="voice-icon">🗣️</span>
+          <span id="voice-text">ENABLE VOICE</span>
+        </button>
+        <button id="btn-toggle-audio" class="btn btn-action-audio" title="Toggle Beep Audio">
+          <span id="audio-icon">🔊</span>
+          <span id="audio-text">BEEP: ON</span>
+        </button>
+        <button id="btn-toggle-camera" class="btn btn-action-cam">
+          <span id="cam-action-icon">📷</span>
+          <span id="cam-action-text">START CAMERA</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Diagnostics / Status Badges Strip -->
+    <section class="status-strip">
+      <span id="badge-camera" class="status-badge badge-neutral">CAM: IDLE</span>
+      <span id="badge-ai" class="status-badge badge-neutral">AI: LOADING</span>
+      <span id="badge-raw-valid" class="status-badge badge-neutral">RAW: 0 | VALID: 0</span>
+      <span id="badge-state" class="status-badge badge-safe">STATE: SAFE</span>
+      <span id="badge-dist-conf" class="status-badge badge-neutral">DIST: UNKNOWN</span>
+      <span id="badge-voice" class="status-badge badge-neutral">VOICE: OFF</span>
+      <span id="badge-haptic" class="status-badge badge-neutral">HAPTIC: CHECK</span>
+      <span id="badge-audio" class="status-badge badge-ready">BEEP: ON</span>
+      <span id="badge-calib" class="status-badge badge-neutral">CALIB: DEFAULT</span>
+      <span class="status-badge badge-info">DROP: DEMO ONLY</span>
+    </section>
+
+    <!-- Continuous Auto Test Status Strip (Section 16) -->
+    <div id="detection-test-strip" class="detection-test-strip">
+      <div class="test-strip-header">
+        <span class="test-label">DETECTION TEST</span>
+        <span id="test-hazard-status" class="test-hazard-badge state-safe">SAFE</span>
+      </div>
+      <div class="test-strip-metrics">
+        <span class="test-stat"><strong id="test-raw-count">RAW: 0</strong></span>
+        <span class="test-stat-divider">|</span>
+        <span class="test-stat"><strong id="test-valid-count">VALID: 0</strong></span>
+        <span class="test-stat-divider">|</span>
+        <span id="test-diagnostic-msg" class="test-msg">AI is not detecting objects.</span>
+      </div>
+    </div>
+
+    <!-- Camera Viewport with Spatial Zones & Overlay -->
+    <main class="viewport-section" id="viewport-section">
+      <!-- Live Video Element -->
+      <video id="camera-feed" autoplay playsinline webkit-playsinline muted></video>
+
+      <!-- Overlay Canvas for Real-Time Bounding Boxes, Corridor & Vectors -->
+      <canvas id="overlay-canvas"></canvas>
+
+      <!-- Three Subtle Spatial Detection Zones -->
+      <div class="zones-grid" id="zones-grid">
+        <div id="zone-left" class="zone-col">
+          <span class="zone-tag">LEFT</span>
+        </div>
+        <div id="zone-center" class="zone-col">
+          <span class="zone-tag">CENTER</span>
+        </div>
+        <div id="zone-right" class="zone-col">
+          <span class="zone-tag">RIGHT</span>
+        </div>
+      </div>
+
+      <!-- Ground / Drop Alert Layer (Demo Mode) -->
+      <div id="drop-hazard-layer" class="drop-hazard-layer">
+        <span class="drop-hazard-banner">⚠️ GROUND DROP / POTHOLE DETECTED (DEMO)</span>
+      </div>
+
+      <!-- Live Debug Telemetry Overlay (Section 14 & 17) -->
+      <div id="debug-telemetry-panel" class="debug-telemetry-panel" style="display: none;">
+        <div class="debug-panel-header">
+          <span class="debug-title">🔬 LIVE DETECTION & TRACKING DEBUG</span>
+          <span id="debug-approach-tag" class="debug-tag">APPROACH: STABLE</span>
+        </div>
+        <div class="debug-grid">
+          <div class="debug-item"><span class="d-lbl">CAMERA:</span> <span id="dbg-cam" class="d-val">IDLE</span></div>
+          <div class="debug-item"><span class="d-lbl">MODEL:</span> <span id="dbg-model" class="d-val">LOADING</span></div>
+          <div class="debug-item"><span class="d-lbl">RAW DETECTIONS:</span> <span id="dbg-raw" class="d-val">0</span></div>
+          <div class="debug-item"><span class="d-lbl">VALID DETECTIONS:</span> <span id="dbg-valid" class="d-val">0</span></div>
+          <div class="debug-item"><span class="d-lbl">MIN CONF:</span> <span id="dbg-min-conf" class="d-val">50%</span></div>
+          <div class="debug-item"><span class="d-lbl">CLASS:</span> <span id="dbg-obj" class="d-val">NONE</span></div>
+          <div class="debug-item"><span class="d-lbl">AI CONF:</span> <span id="dbg-conf" class="d-val">0%</span></div>
+          <div class="debug-item"><span class="d-lbl">BOX:</span> <span id="dbg-box" class="d-val">--</span></div>
+          <div class="debug-item"><span class="d-lbl">PATH OVERLAP:</span> <span id="dbg-overlap" class="d-val">0%</span></div>
+          <div class="debug-item"><span class="d-lbl">EST DISTANCE:</span> <span id="dbg-dist" class="d-val">UNKNOWN</span></div>
+          <div class="debug-item"><span class="d-lbl">DIST CONF:</span> <span id="dbg-dist-conf" class="d-val">UNKNOWN</span></div>
+          <div class="debug-item"><span class="d-lbl">DIRECTION:</span> <span id="dbg-dir" class="d-val">NONE</span></div>
+          <div class="debug-item"><span class="d-lbl">PERSISTENCE:</span> <span id="dbg-persist" class="d-val">0/2</span></div>
+          <div class="debug-item"><span class="d-lbl">HAZARD STATE:</span> <span id="dbg-state" class="d-val">SAFE</span></div>
+        </div>
+      </div>
+
+      <!-- Camera Start Prompt Overlay -->
+      <div id="camera-prompt-overlay" class="camera-prompt-overlay">
+        <div class="prompt-box">
+          <button id="btn-prompt-close" class="prompt-close-btn" title="Close Overlay">&times;</button>
+          <div class="prompt-glyph">🚶‍♂️</div>
+          <h2>SenseStep Mobile</h2>
+          <p class="prompt-desc">
+            Calibrated spatial obstacle guidance: filters background clutter to focus strictly on your <strong>Walking Corridor</strong>, speaks directions, and triggers haptics when supported.
+          </p>
+          <div class="prompt-btn-group">
+            <button id="btn-prompt-start" class="btn btn-primary btn-large">
+              🗣️ Enable Voice, Camera & Sound
+            </button>
+            <button id="btn-prompt-virtual" class="btn btn-warning-action btn-large">
+              🎬 Run Virtual Camera Walk
+            </button>
+            <button id="btn-prompt-demo" class="btn btn-secondary btn-small">
+              Enter Manual Demo Mode
+            </button>
+          </div>
+          <p class="prompt-note">Optimized for iPhone (Safari/Chrome WebKit) & Android over HTTPS.</p>
+        </div>
+      </div>
+
+      <!-- AI Unavailable Banner (Only shown if CDN/Model fails) -->
+      <div id="ai-error-banner" class="ai-error-banner" style="display: none;">
+        <span>AI MODEL: UNAVAILABLE</span>
+        <button id="btn-switch-to-demo" class="btn btn-tiny">Switch to Demo Mode</button>
+      </div>
+    </main>
+
+    <!-- Bottom Controls & HUD Panel -->
+    <section class="hud-panel" id="hud-panel">
+      <!-- Large Prominent Navigation Instruction Card (User-Feedback Layer) -->
+      <div id="nav-instruction-card" class="nav-instruction-card urgency-safe">
+        <div class="nav-card-header">
+          <span class="nav-card-pill">NAVIGATION ACTION</span>
+          <span id="nav-urgency-badge" class="nav-urgency-badge badge-safe">SAFE</span>
+        </div>
+        <div id="nav-action-text" class="nav-action-text">CONTINUE</div>
+        <div id="nav-detail-text" class="nav-detail-text">Path clear.</div>
+        <div id="nav-dist-text" class="nav-dist-text">Estimated distance: --</div>
+      </div>
+
+      <!-- PRESENTATION MODE PANEL (Enlarged Recording Card) -->
+      <div id="presentation-panel" class="presentation-panel" style="display: none;">
+        <div class="pres-header">
+          <span class="pres-title">SENSESTEP</span>
+          <button id="btn-exit-presentation" class="btn btn-tiny pres-exit-btn">Exit Presentation</button>
+        </div>
+        <div class="pres-hero-card">
+          <div id="pres-action-text" class="pres-action-text">CONTINUE</div>
+          <div id="pres-detail-text" class="pres-detail-text">Path clear.</div>
+          <div id="pres-dist-text" class="pres-dist-text">Estimated distance: --</div>
+        </div>
+        <div class="pres-status-row">
+          <span id="pres-voice-badge" class="pres-status-pill">VOICE: OFF</span>
+          <span id="pres-haptic-badge" class="pres-status-pill">HAPTIC: UNSUPPORTED</span>
+          <span id="pres-hazard-badge" class="pres-status-pill">HAZARD: SAFE</span>
+        </div>
+      </div>
+
+      <!-- Main Telemetry HUD Card -->
+      <div class="telemetry-card" id="telemetry-card">
+        <div class="telemetry-card-top">
+          <div class="telemetry-mode-indicator">
+            <span id="hud-mode-badge" class="badge-mode badge-auto">MODE: AUTO</span>
+            <span id="hud-state-machine-badge" class="badge-state-machine state-safe">SAFE</span>
+            <span id="hud-approach-badge" class="badge-approach" style="display: none;">STABLE</span>
+          </div>
+          <div class="telemetry-detected-object" id="hud-object-tag">
+            OBJECT: NONE
+          </div>
+        </div>
+
+        <div class="telemetry-metrics-grid">
+          <!-- HAZARD -->
+          <div class="metric-box">
+            <span class="metric-label">HAZARD</span>
+            <span id="metric-hazard" class="metric-value text-safe">SAFE</span>
+          </div>
+
+          <!-- DIRECTION -->
+          <div class="metric-box">
+            <span class="metric-label">DIRECTION</span>
+            <span id="metric-direction" class="metric-value">CENTER</span>
+          </div>
+
+          <!-- EST. DISTANCE -->
+          <div class="metric-box">
+            <span class="metric-label">EST. DISTANCE</span>
+            <span id="metric-distance" class="metric-value">UNKNOWN</span>
+          </div>
+
+          <!-- HAPTIC -->
+          <div class="metric-box">
+            <span class="metric-label">HAPTIC</span>
+            <span id="metric-haptic" class="metric-value text-muted">OFF</span>
+          </div>
+        </div>
+
+        <!-- Telemetry Secondary Stats: Confidence, Overlap, Persistence -->
+        <div class="telemetry-secondary-row">
+          <span class="sec-stat"><strong id="stat-ai-conf">AI CONF: --</strong></span>
+          <span class="sec-stat"><strong id="stat-overlap">PATH OVERLAP: --</strong></span>
+          <span class="sec-stat"><strong id="stat-persist">PERSISTENCE: 0/3</strong></span>
+          <span class="sec-stat"><strong id="stat-dist-conf">DIST CONF: UNKNOWN</strong></span>
+        </div>
+
+        <!-- Haptic / Spoken Feedback Description Bar -->
+        <div class="haptic-ticker">
+          <span id="haptic-pulse-dot" class="ticker-dot"></span>
+          <span id="haptic-ticker-text">Path clear. Walking corridor clear of persistent obstacles.</span>
+        </div>
+      </div>
+
+      <!-- Primary Mode Switcher Tabs & Calibrate Button -->
+      <div class="nav-control-row" id="nav-control-row">
+        <div class="mode-tabs">
+          <button id="tab-mode-auto" class="mode-tab active">AUTO MODE</button>
+          <button id="tab-mode-demo" class="mode-tab">DEMO MODE</button>
+          <button id="tab-mode-pres" class="mode-tab">🎬 PRESENTATION</button>
+        </div>
+        <button id="btn-open-calibration" class="btn btn-outline-cyan">
+          ⚙️ CALIBRATE
+        </button>
+      </div>
+
+      <!-- DEMO MODE Controls (Active in Demo Mode) -->
+      <div id="demo-mode-section" class="demo-section" style="display: none;">
+        <div class="section-header">
+          <span class="section-title">DEMO MODE — COMPLETE FEEDBACK PIPELINE</span>
+          <span class="section-tag">Instant Testing</span>
+        </div>
+        <div class="demo-hazard-grid">
+          <button class="btn-hazard btn-hz-safe active" data-hz="SAFE">
+            <span class="hz-name">SAFE</span>
+            <span class="hz-sub">Path Clear</span>
+          </button>
+          <button class="btn-hazard btn-hz-left" data-hz="LEFT">
+            <span class="hz-name">LEFT</span>
+            <span class="hz-sub">Move Right</span>
+          </button>
+          <button class="btn-hazard btn-hz-center" data-hz="CENTER">
+            <span class="hz-name">CENTER</span>
+            <span class="hz-sub">Move L or R</span>
+          </button>
+          <button class="btn-hazard btn-hz-right" data-hz="RIGHT">
+            <span class="hz-name">RIGHT</span>
+            <span class="hz-sub">Move Left</span>
+          </button>
+          <button class="btn-hazard btn-hz-drop" data-hz="DROP">
+            <span class="hz-name">DROP</span>
+            <span class="hz-sub">Stop Prompt</span>
+          </button>
+          <button class="btn-hazard btn-hz-critical" data-hz="CRITICAL">
+            <span class="hz-name">CRITICAL</span>
+            <span class="hz-sub">Stop Alert</span>
+          </button>
+        </div>
+
+        <!-- Simulated Distance Selector in Demo Mode -->
+        <div class="sim-distance-row">
+          <span class="sim-dist-label">SIMULATED DISTANCE:</span>
+          <div class="sim-dist-buttons">
+            <button class="btn-dist" data-dist="0.3">0.3 m</button>
+            <button class="btn-dist active" data-dist="0.7">0.7 m</button>
+            <button class="btn-dist" data-dist="1.5">1.5 m</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- HAPTIC / FEEDBACK TEST Section -->
+      <div class="test-haptics-section" id="test-haptics-section">
+        <div class="section-header">
+          <span class="section-title">HAPTIC / FEEDBACK TEST</span>
+          <span id="haptic-capability-badge" class="section-tag">HAPTIC: CHECK</span>
+        </div>
+        <div class="test-buttons-row">
+          <button id="test-hz-left" class="btn btn-test">LEFT</button>
+          <button id="test-hz-center" class="btn btn-test">CENTER</button>
+          <button id="test-hz-right" class="btn btn-test">RIGHT</button>
+          <button id="test-hz-drop" class="btn btn-test">DROP</button>
+          <button id="test-hz-critical" class="btn btn-test">CRITICAL</button>
+          <button id="test-hz-safe" class="btn btn-test btn-test-stop">STOP</button>
+        </div>
+        <div class="speaker-tip-card">
+          <span class="speaker-tip-icon">📢</span>
+          <div class="speaker-tip-text">
+            <strong>Assistive Feedback Pipeline:</strong><br>
+            • <strong>Spoken Instruction:</strong> Web Speech API gives natural spoken navigation instructions.<br>
+            • <strong>Haptics:</strong> Pulsed vibration triggered <em>only when supported</em> by browser (Android Chrome).<br>
+            • <strong>iOS Compatibility:</strong> Browser vibration is restricted on iOS WebKit. SenseStep uses spoken guidance and directional audio as the primary feedback channel on iPhone.<br>
+            • <strong>Volume Tip:</strong> On iPhone, switch the physical <strong>Ring/Silent switch</strong> to Ring mode and turn up Media Volume.
+          </div>
+        </div>
+      </div>
+
+      <!-- Technical Disclaimer -->
+      <footer class="app-footer" id="app-footer">
+        <p>
+          <strong>SenseStep Demonstration Prototype:</strong> Camera distance is an estimate based on empirical optical calibration. It is not equivalent to ultrasonic time-of-flight measurement.
+        </p>
+      </footer>
+    </section>
+
+    <!-- Comprehensive Settings & Calibration Modal (Sections 7, 8, 9, 18, 19, 20) -->
+    <div id="calibration-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-card modal-card-large">
+        <div class="modal-header">
+          <div>
+            <h3>SENSESTEP DISTANCE CALIBRATION & SETTINGS</h3>
+            <p class="modal-sub">Multi-point empirical optical calibration & corridor filtering</p>
+          </div>
+          <button id="btn-close-calibration" class="btn-close">&times;</button>
+        </div>
+
+        <!-- Calibration Modal Tabs -->
+        <div class="cal-tabs-row">
+          <button id="tab-cal-calibrate" class="cal-nav-tab active">1. CALIBRATE</button>
+          <button id="tab-cal-test" class="cal-nav-tab">2. TEST ACCURACY</button>
+          <button id="tab-cal-settings" class="cal-nav-tab">3. SETTINGS</button>
+        </div>
+
+        <!-- TAB 1: CALIBRATION WIZARD -->
+        <div id="panel-cal-calibrate" class="cal-tab-panel">
+          <div class="cal-instruction-box">
+            <strong>Calibration Procedure:</strong>
+            <p>Calibration works best with the same phone, camera, and object type (e.g. Person, Chair, Backpack) you will use during testing.</p>
+            <ol>
+              <li>Place reference object at <strong>0.5m</strong>, select 0.5m below, tap <em>Capture</em>.</li>
+              <li>Move to <strong>1.0m</strong>, select 1.0m, tap <em>Capture</em>.</li>
+              <li>Move to <strong>1.5m</strong>, select 1.5m, tap <em>Capture</em>.</li>
+              <li>Optionally capture <strong>2.0m</strong>. Require $\ge 3$ samples for high-quality calibration.</li>
+            </ol>
+          </div>
+
+          <div class="calibration-preview-box">
+            <div class="cal-preview-row">
+              <span class="cal-prev-lbl">CURRENT TARGET:</span>
+              <strong id="cal-target-object" class="text-cyan">Point camera at reference object</strong>
+            </div>
+            <div class="cal-preview-row">
+              <span class="cal-prev-lbl">BBOX HEIGHT:</span>
+              <span id="cal-target-height">-- px</span>
+            </div>
+            <div class="cal-preview-row">
+              <span class="cal-prev-lbl">AI CONFIDENCE:</span>
+              <span id="cal-target-conf">--%</span>
+            </div>
+          </div>
+
+          <div class="modal-form-group">
+            <label>Select Known Actual Distance:</label>
+            <div class="dist-choice-group">
+              <button class="btn-cal-dist" data-caldist="0.5">0.5 m</button>
+              <button class="btn-cal-dist active" data-caldist="1.0">1.0 m</button>
+              <button class="btn-cal-dist" data-caldist="1.5">1.5 m</button>
+              <button class="btn-cal-dist" data-caldist="2.0">2.0 m</button>
+              <button id="btn-cal-custom" class="btn-cal-dist" data-caldist="custom">Custom</button>
+            </div>
+            <div id="custom-dist-input-row" style="display: none; margin-top: 6px;">
+              <input type="number" id="input-custom-dist" placeholder="Distance in meters (e.g. 1.25)" step="0.1" min="0.3" max="5.0" class="cal-num-input">
+            </div>
+          </div>
+
+          <div class="cal-status-row">
+            <div class="cal-stat-badge">
+              <span>SAMPLES:</span>
+              <strong id="cal-sample-count">0</strong>
+            </div>
+            <div class="cal-stat-badge">
+              <span>QUALITY:</span>
+              <strong id="cal-quality-badge" class="text-warning">POOR (INSUFFICIENT)</strong>
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button id="btn-capture-sample" class="btn btn-primary btn-large">
+              📸 Capture Calibration Sample
+            </button>
+            <div class="modal-actions-sub">
+              <button id="btn-view-samples" class="btn btn-secondary btn-small">View Samples Table</button>
+              <button id="btn-clear-calibration" class="btn btn-danger-small btn-small">Reset Calibration</button>
+            </div>
+          </div>
+
+          <div id="samples-table-container" style="display: none; margin-top: 10px;">
+            <div class="section-title">RECORDED SAMPLES</div>
+            <div class="table-wrap">
+              <table id="cal-samples-table" class="cal-table">
+                <thead>
+                  <tr><th>Class</th><th>Dist</th><th>Height</th><th>Action</th></tr>
+                </thead>
+                <tbody id="cal-samples-tbody">
+                  <tr><td colspan="4">No samples captured yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: REAL-WORLD TEST MODE (Section 20) -->
+        <div id="panel-cal-test" class="cal-tab-panel" style="display: none;">
+          <div class="cal-instruction-box">
+            <strong>Real-World Accuracy Evaluation:</strong>
+            <p>Place your reference object at a known tape-measured distance. Compare the camera's empirical distance estimate against actual ground truth to verify calibration.</p>
+          </div>
+
+          <div class="modal-form-group">
+            <label>Choose Ground Truth Distance to Test:</label>
+            <div class="dist-choice-group">
+              <button class="btn-test-dist" data-testdist="0.5">0.5 m</button>
+              <button class="btn-test-dist active" data-testdist="1.0">1.0 m</button>
+              <button class="btn-test-dist" data-testdist="1.5">1.5 m</button>
+              <button class="btn-test-dist" data-testdist="2.0">2.0 m</button>
+            </div>
+          </div>
+
+          <div class="test-accuracy-card">
+            <div class="test-metric-row">
+              <span>Expected Distance:</span>
+              <strong id="test-expected-readout" class="text-cyan">1.00 m</strong>
+            </div>
+            <div class="test-metric-row">
+              <span>Measured Estimate:</span>
+              <strong id="test-measured-readout">-- m</strong>
+            </div>
+            <div class="test-metric-row">
+              <span>Error Deviation:</span>
+              <strong id="test-error-readout">--</strong>
+            </div>
+            <div class="test-metric-row">
+              <span>Distance Confidence:</span>
+              <span id="test-conf-readout" class="badge-neutral">UNKNOWN</span>
+            </div>
+          </div>
+
+          <p class="modal-disclaimer">
+            ⚠️ <em>Important Limitation: Camera distance is an optical estimate. It is not equivalent to ultrasonic acoustic time-of-flight measurement.</em>
+          </p>
+        </div>
+
+        <!-- TAB 3: ENGINE SETTINGS (Section 18) -->
+        <div id="panel-cal-settings" class="cal-tab-panel" style="display: none;">
+          <div class="settings-form">
+            <!-- Min Confidence -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <label for="slider-min-conf">Minimum AI Confidence:</label>
+                <span id="val-min-conf" class="slider-val">50%</span>
+              </div>
+              <input type="range" id="slider-min-conf" min="0.35" max="0.85" step="0.05" value="0.50" class="cal-range">
+              <span class="slider-hint">Filters low-confidence AI detections to prevent ghost obstacles. Recommended: 50%.</span>
+            </div>
+
+            <!-- Path Overlap Threshold -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <label for="slider-path-overlap">Path Overlap Threshold:</label>
+                <span id="val-path-overlap" class="slider-val">5%</span>
+              </div>
+              <input type="range" id="slider-path-overlap" min="0.01" max="0.50" step="0.01" value="0.05" class="cal-range">
+              <span class="slider-hint">Minimum required overlap with Walking Corridor to generate an obstacle alert.</span>
+            </div>
+
+            <!-- Persistence Frames -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <label for="slider-persistence">Temporal Persistence Frames:</label>
+                <span id="val-persistence" class="slider-val">2 frames</span>
+              </div>
+              <input type="range" id="slider-persistence" min="1" max="5" step="1" value="2" class="cal-range">
+              <span class="slider-hint">Consecutive detections required to confirm an obstacle (1 frame = POSSIBLE, 2 = CONFIRMED).</span>
+            </div>
+
+            <!-- Minimum Object Size (Area Ratio) -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <label for="slider-min-area">Minimum Object Area:</label>
+                <span id="val-min-area" class="slider-val">0.5%</span>
+              </div>
+              <input type="range" id="slider-min-area" min="0.001" max="0.030" step="0.001" value="0.005" class="cal-range">
+              <span class="slider-hint">Rejects tiny background artifacts without filtering legitimate close obstacles.</span>
+            </div>
+
+            <!-- Critical Distance Threshold -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <label for="slider-crit-dist">Critical Collision Distance:</label>
+                <span id="val-crit-dist" class="slider-val">0.50 m</span>
+              </div>
+              <input type="range" id="slider-crit-dist" min="0.30" max="0.80" step="0.05" value="0.50" class="cal-range">
+              <span class="slider-hint">Objects closer than this distance trigger high-urgency STOP warnings.</span>
+            </div>
+
+            <!-- Warning Distance Threshold -->
+            <div class="slider-group">
+              <div class="slider-label-row">
+                <label for="slider-warn-dist">Warning Guidance Distance:</label>
+                <span id="val-warn-dist" class="slider-val">1.00 m</span>
+              </div>
+              <input type="range" id="slider-warn-dist" min="0.80" max="1.80" step="0.10" value="1.00" class="cal-range">
+              <span class="slider-hint">Objects within this threshold trigger directional MOVE LEFT / RIGHT guidance.</span>
+            </div>
+
+            <div class="settings-actions">
+              <button id="btn-save-settings" class="btn btn-primary btn-small">Save Settings</button>
+              <button id="btn-reset-settings" class="btn btn-secondary btn-small">Reset Detection Settings</button>
+            </div>
+          </div>
+        </div>
+
+        <p class="modal-disclaimer modal-footer-note">
+          ⚠️ <em>Camera distance is an optical estimate. The physical SenseStep cane utilizes 4× HC-SR04 ultrasonic acoustic transducers driven by an ESP32 for true acoustic time-of-flight.</em>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
