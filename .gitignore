@@ -1,0 +1,18 @@
+# SenseStep Git Ignore Configuration
+
+# Local video production workspace (YouTube demonstration suite)
+video/
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local build & IDE directories
+build/
+.vscode/
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
